@@ -10,16 +10,32 @@ A professional tool that automatically creates fake game processes for Discord O
 
 <img width="485" height="426" alt="Capture d'écran 2026-01-16 204625" src="https://github.com/user-attachments/assets/07cbdd26-b248-4bd0-8092-61a54c80d2ed" />
 
-## Fix for Marathon & Toxic Commando
+## 🚨 BIG NEWS — Steam Quest Mode
 
-These two games cannot be detected through the normal database search. To complete their quests, use **Manual Mode** (option 2 from the menu) and enter the following custom paths:
+A major new feature has been added: **Steam Quest Mode**.
 
-- Marathon: `Marathon Server Slam/Marathon.exe`
-- Toxic Commando: `John Carpenter's Toxic Commando Demo/John Carpenter's Toxic Commando.exe`
+Some games (like Marathon or Toxic Commando) use a more advanced detection method — Discord doesn't just check the process name and folder, it also verifies that Steam has actually registered the game as downloading. Without this, the standard spoofing methods simply don't work.
 
-Before launching the tool, start the download on Steam, wait for it to reach 1-2%, then pause it. The fake process will be created under `Desktop/Win64/` with the full path, and Discord should detect it normally.
+**Steam Quest Mode bypasses this entirely**, with no download required.
 
-Other games (Where Winds Meet, Grounded 2, Once Human, Opera GX) still work through the normal database search without this workaround.
+### How it works
+
+1. You search for the game by name directly inside the tool — no need to go to SteamDB or look up AppIDs manually
+2. The tool fetches the game's metadata from the SteamCMD public API (install directory, executable path, depot info)
+3. It retrieves your Steam ID automatically from the Windows registry
+4. It generates a fake `appmanifest_<appid>.acf` file in your `steamapps/` folder — this is the exact file Steam creates when a download is in progress, with realistic values (`StateFlags 1026`, `LastOwner`, `StagedDepots`, etc.)
+5. It places the fake executable directly in `steamapps/common/<game>/`
+6. Discord scans your steamapps folder, finds the manifest, sees the process running, and validates the quest
+
+### What's supported
+
+- ✅ Works for any game that requires a Steam manifest to be detected
+- ✅ Fully automatic — no manual AppID lookup needed
+- ✅ Your real Steam ID is used so the manifest looks legitimate
+- ✅ Searches demos and full games separately (important — quests often target the Demo version)
+- ✅ Cleans up after itself once you're done
+
+> **TIP:** If a quest targets a demo, search for `"Toxic Commando Demo"` instead of just `"Toxic Commando"` — they have different AppIDs and the wrong one won't work.
 
 ## Features
 
@@ -221,6 +237,7 @@ This project is licensed under the GNU General Public License v3.0 (GPL-3.0). Se
 **Strykey**
 
 *"Because sometimes you just need those orbs without the commitment of a 100GB download."*
+
 
 
 
