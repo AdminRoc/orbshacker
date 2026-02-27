@@ -10,8 +10,6 @@ A professional tool that automatically creates fake game processes for Discord O
 
 <img width="485" height="426" alt="Capture d'écran 2026-01-16 204625" src="https://github.com/user-attachments/assets/07cbdd26-b248-4bd0-8092-61a54c80d2ed" />
 
-Voici la section en anglais, prête à coller dans votre README :
-
 ## Fix for Marathon & Toxic Commando
 
 These two games cannot be detected through the normal database search. To complete their quests, use **Manual Mode** (option 2 from the menu) and enter the following custom paths:
@@ -223,6 +221,7 @@ This project is licensed under the GNU General Public License v3.0 (GPL-3.0). Se
 **Strykey**
 
 *"Because sometimes you just need those orbs without the commitment of a 100GB download."*
+
 
 
 
