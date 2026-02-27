@@ -66,7 +66,7 @@ def print_banner():
                                                                 
 {Colors.RESET}
     {Colors.GRAY}Developer: {Colors.CYAN}Strykey{Colors.RESET}
-    {Colors.GRAY}Version: {Colors.WHITE}2.0.0{Colors.RESET}
+    {Colors.GRAY}Version: {Colors.WHITE}2.1.0{Colors.RESET}
     {Colors.GRAY}Database: {Colors.GREEN}Discord Official API + GitHub Archive{Colors.RESET}
 """
     print(banner)
@@ -88,6 +88,303 @@ def loading_animation(text, duration=1.5):
     sys.stdout.flush()
 
 
+# ─────────────────────────────────────────────
+#  STEAM QUEST MODE  –  helpers
+# ─────────────────────────────────────────────
+
+def get_steam_path():
+    """Read Steam installation path from Windows registry."""
+    if sys.platform != 'win32':
+        return None
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+        value, _ = winreg.QueryValueEx(key, "SteamPath")
+        winreg.CloseKey(key)
+        return Path(value)
+    except Exception:
+        # Fallback to common default
+        fallback = Path("C:/Program Files (x86)/Steam")
+        return fallback if fallback.exists() else None
+
+
+def get_steam_user_id():
+    """Read the currently logged-in Steam user ID from registry."""
+    if sys.platform != 'win32':
+        return "0"
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess")
+        value, _ = winreg.QueryValueEx(key, "ActiveUser")
+        winreg.CloseKey(key)
+        # Convert 32-bit accountid to 64-bit SteamID
+        steam_id_64 = int(value) + 76561197960265728
+        return str(steam_id_64)
+    except Exception:
+        return "0"
+
+
+def fetch_steam_app_info(appid):
+    """
+    Fetch app info from SteamCMD public API.
+    Returns dict with keys: name, installdir, executable  (or None on failure)
+    """
+    url = f"https://api.steamcmd.net/v1/info/{appid}"
+    try:
+        loading_animation(f"Fetching Steam app info for {appid}", 1.2)
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        app_data = data.get("data", {}).get(str(appid), {})
+        common  = app_data.get("common", {})
+        config  = app_data.get("config", {})
+
+        name       = common.get("name", f"App {appid}")
+        installdir = config.get("installdir", name)
+
+        # Try to find first Windows launch executable
+        launch = config.get("launch", {})
+        executable = None
+        for key in sorted(launch.keys()):
+            entry = launch[key]
+            cfg   = entry.get("config", {})
+            oslist = cfg.get("oslist", "windows")
+            if "windows" in oslist or oslist == "":
+                exe = entry.get("executable", "")
+                if exe.endswith(".exe"):
+                    executable = exe.replace("\\", "/")
+                    break
+
+        # Last resort: just use installdir name as exe
+        if not executable:
+            executable = installdir.split("/")[-1] + ".exe"
+
+        # Try to get first depot id for StagedDepots
+        depots = app_data.get("depots", {})
+        depot_id = None
+        for k, v in depots.items():
+            if k.isdigit() and isinstance(v, dict):
+                depot_id = k
+                break
+
+        return {"name": name, "installdir": installdir, "executable": executable, "depot_id": depot_id}
+
+    except Exception as e:
+        print_color(f"[!] SteamCMD API error: {e}", Colors.YELLOW)
+        return None
+
+
+def generate_appmanifest(appid, name, installdir, steam_path, depot_id=None):
+    """
+    Generate a realistic appmanifest_<appid>.acf matching what Steam creates
+    during an active download (StateFlags 1026 = downloading).
+    """
+    steam_exe = str(steam_path / "steam.exe").replace("/", "\\\\")
+    owner_id  = get_steam_user_id()
+
+    staged_depots_block = ""
+    if depot_id:
+        staged_depots_block = f'''
+\t\t"{depot_id}"
+\t\t{{
+\t\t\t"manifest"\t\t"0"
+\t\t\t"size"\t\t"1073741824"
+\t\t\t"dlcappid"\t\t"0"
+\t\t}}'''
+
+    acf_content = f'''"AppState"
+{{
+\t"appid"\t\t"{appid}"
+\t"universe"\t\t"1"
+\t"LauncherPath"\t\t"{steam_exe}"
+\t"name"\t\t"{name}"
+\t"StateFlags"\t\t"1026"
+\t"installdir"\t\t"{installdir}"
+\t"LastUpdated"\t\t"0"
+\t"LastPlayed"\t\t"0"
+\t"SizeOnDisk"\t\t"0"
+\t"StagingSize"\t\t"1073741824"
+\t"buildid"\t\t"0"
+\t"LastOwner"\t\t"{owner_id}"
+\t"DownloadType"\t\t"1"
+\t"UpdateResult"\t\t"4"
+\t"BytesToDownload"\t\t"1073741824"
+\t"BytesDownloaded"\t\t"27262976"
+\t"BytesToStage"\t\t"1073741824"
+\t"BytesStaged"\t\t"27262976"
+\t"TargetBuildID"\t\t"0"
+\t"AutoUpdateBehavior"\t\t"0"
+\t"AllowOtherDownloadsWhileRunning"\t\t"0"
+\t"ScheduledAutoUpdate"\t\t"0"
+\t"InstalledDepots"
+\t{{
+\t}}
+\t"StagedDepots"
+\t{{{staged_depots_block}
+\t}}
+\t"UserConfig"
+\t{{
+\t}}
+\t"MountedConfig"
+\t{{
+\t}}
+}}
+'''
+    acf_path = steam_path / "steamapps" / f"appmanifest_{appid}.acf"
+    try:
+        acf_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(acf_path, "w", encoding="utf-8") as f:
+            f.write(acf_content)
+        print_color(f"[OK] Created appmanifest: {acf_path}", Colors.GREEN, bold=True)
+        return acf_path
+    except Exception as e:
+        print_color(f"[ERROR] Failed to write appmanifest: {e}", Colors.RED, bold=True)
+        return None
+
+
+def search_steam_games(query):
+    """Search Steam store for games matching query. Returns list of {id, name} dicts."""
+    try:
+        loading_animation(f"Searching Steam for '{query}'", 1.0)
+        resp = requests.get(
+            "https://store.steampowered.com/api/storesearch",
+            params={"term": query, "l": "english", "cc": "US"},
+            timeout=10
+        )
+        resp.raise_for_status()
+        return resp.json().get("items", [])
+    except Exception as e:
+        print_color(f"[!] Steam search error: {e}", Colors.YELLOW)
+        return []
+
+
+def steam_quest_mode(faker):
+    """Steam Quest Mode – generates appmanifest + fake exe for any Steam appid."""
+    print_boxed_title("STEAM QUEST MODE", width=55, color=Colors.CYAN)
+
+    print_color("[*] This mode generates a fake Steam appmanifest + exe", Colors.CYAN)
+    print_color("[*] Required for games that verify Steam ownership (Marathon, Toxic Commando…)", Colors.GRAY)
+    print_color("[*] Search by game name — demos and DLCs are listed separately, pick the right one!", Colors.YELLOW)
+    print_color("[*] TIP: If the quest targets a Demo, search 'Toxic Commando Demo' not just 'Toxic Commando'", Colors.GRAY)
+    print()
+
+    # ── locate Steam ──────────────────────────────────────────────────
+    steam_path = get_steam_path()
+    if not steam_path or not steam_path.exists():
+        print_color("[!] Could not locate Steam automatically.", Colors.YELLOW)
+        manual_steam = input(f"{Colors.BOLD}Enter Steam path manually{Colors.RESET} (e.g. C:/Program Files (x86)/Steam): ").strip()
+        if not manual_steam:
+            print_color("[!] No Steam path provided. Aborting.", Colors.RED)
+            return
+        steam_path = Path(manual_steam)
+
+    print_color(f"[OK] Steam found at: {steam_path}", Colors.GREEN)
+
+    # ── search game ───────────────────────────────────────────────────
+    query = input(f"\n{Colors.BOLD}Search game{Colors.RESET} (or 'back'): ").strip()
+    if query.lower() in ['back', 'b', '']:
+        return
+
+    results = search_steam_games(query)
+
+    if not results:
+        print_color(f"\n[ERROR] No results found for '{query}'", Colors.RED)
+        print_color("[!] Try a different search term", Colors.YELLOW)
+        time.sleep(2)
+        return
+
+    print(f"\n{Colors.BOLD}{Colors.GREEN}Found {len(results)} result(s):{Colors.RESET}\n")
+    print(f"{Colors.GRAY}{'─' * 60}{Colors.RESET}")
+    for idx, game in enumerate(results, 1):
+        print(f"  {Colors.BOLD}{Colors.CYAN}{idx:2d}.{Colors.RESET} {Colors.WHITE}{game['name']}{Colors.RESET}  {Colors.GRAY}(AppID: {game['id']}){Colors.RESET}")
+        if idx < len(results):
+            print(f"{Colors.GRAY}{'─' * 60}{Colors.RESET}")
+    print()
+
+    choice = input(f"{Colors.BOLD}Select [1-{len(results)}]{Colors.RESET} (or 'back'): ").strip()
+    if choice.lower() in ['back', 'b', '']:
+        return
+    try:
+        choice = int(choice)
+        if choice < 1 or choice > len(results):
+            raise ValueError
+    except ValueError:
+        print_color("[ERROR] Invalid selection.", Colors.RED)
+        time.sleep(1.5)
+        return
+
+    selected = results[choice - 1]
+    appid    = int(selected['id'])
+    print_color(f"\n[OK] Selected: {selected['name']} (AppID: {appid})", Colors.GREEN, bold=True)
+
+    # ── fetch info from SteamCMD API ──────────────────────────────────
+    info = fetch_steam_app_info(appid)
+    if not info:
+        print_color("[!] Could not fetch app info automatically.", Colors.YELLOW)
+        print_color("[*] You can enter the details manually:", Colors.CYAN)
+        info = {
+            "name":       input(f"  {Colors.BOLD}Game name{Colors.RESET}: ").strip() or f"App {appid}",
+            "installdir": input(f"  {Colors.BOLD}Install dir{Colors.RESET} (folder name in steamapps/common): ").strip() or f"App{appid}",
+            "executable": input(f"  {Colors.BOLD}Executable{Colors.RESET} (relative path, e.g. Bin/Game.exe): ").strip() or "Game.exe",
+        }
+
+    print(f"\n{Colors.BOLD}Detected info:{Colors.RESET}")
+    print(f"  Name:        {Colors.CYAN}{info['name']}{Colors.RESET}")
+    print(f"  Install dir: {Colors.CYAN}{info['installdir']}{Colors.RESET}")
+    print(f"  Executable:  {Colors.CYAN}{info['executable']}{Colors.RESET}")
+
+    # Allow override
+    override = input(f"\n{Colors.BOLD}Override executable path?{Colors.RESET} [leave empty to keep]: ").strip()
+    if override:
+        info['executable'] = override.replace("\\", "/")
+
+    exe_full_path = f"{info['installdir']}/{info['executable']}"
+    fake_exe_path = steam_path / "steamapps" / "common" / exe_full_path.replace("/", os.sep)
+
+    print(f"\n{Colors.BOLD}Summary:{Colors.RESET}")
+    print(f"  AppManifest: {Colors.GRAY}{steam_path / 'steamapps' / f'appmanifest_{appid}.acf'}{Colors.RESET}")
+    print(f"  Fake exe:    {Colors.GRAY}{fake_exe_path}{Colors.RESET}")
+
+    confirm = input(f"\n{Colors.BOLD}Create and launch?{Colors.RESET} [Y/n]: ").strip().lower()
+    if confirm not in ['', 'y', 'yes']:
+        print_color("\n[!] Operation cancelled.", Colors.YELLOW)
+        time.sleep(1)
+        return
+
+    # ── generate appmanifest ──────────────────────────────────────────
+    acf = generate_appmanifest(appid, info['name'], info['installdir'], steam_path, depot_id=info.get('depot_id'))
+    if not acf:
+        print_color("[ERROR] Failed to create appmanifest. Aborting.", Colors.RED)
+        time.sleep(1.5)
+        return
+
+    # ── create fake exe ───────────────────────────────────────────────
+    fake_exe_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        loading_animation(f"Creating {info['executable'].split('/')[-1]}", 0.8)
+        shutil.copy2(faker.exe_source, fake_exe_path)
+        print_color(f"[OK] Created: {fake_exe_path}", Colors.GREEN, bold=True)
+    except Exception as e:
+        print_color(f"[ERROR] Failed to copy exe: {e}", Colors.RED, bold=True)
+        time.sleep(1.5)
+        return
+
+    # ── launch ────────────────────────────────────────────────────────
+    print()
+    faker.launch_executable(fake_exe_path)
+
+    print_color("\n[OK] Steam Quest setup complete!", Colors.GREEN, bold=True)
+    print_color("[!] Discord MUST be running for detection to work.", Colors.YELLOW)
+    print_color("[*] Keep the process running until the quest is done.", Colors.CYAN)
+    print_color("[*] When done, you can delete the appmanifest and the fake exe.", Colors.GRAY)
+
+    input(f"\n{Colors.GRAY}Press Enter to continue...{Colors.RESET}")
+
+
+# ─────────────────────────────────────────────
+
+
 class DiscordGamesDB:
     DISCORD_API_URL = "https://discord.com/api/v9/applications/detectable"
     GITHUB_BACKUP_URL = "https://gist.githubusercontent.com/Cynosphere/c1e77f77f0e565ddaac2822977961e76/raw/gameslist.json"
@@ -101,11 +398,9 @@ class DiscordGamesDB:
         """Load games from Discord API or GitHub backup"""
         print_color("\n[*] Loading games database...", Colors.YELLOW)
         
-        # Try Discord Official API first
         if self._load_from_discord_api():
             return
         
-        # Fallback to GitHub
         print_color("[!] Discord API unavailable, using GitHub backup...", Colors.YELLOW)
         if self._load_from_github():
             return
@@ -166,14 +461,11 @@ class DiscordGamesDB:
             name = game.get('name', '').lower()
             aliases = [a.lower() for a in game.get('aliases', [])]
             
-            # Exact match priority
             if query_lower == name or query_lower in aliases:
                 matches.insert(0, game)
-            # Partial match
             elif query_lower in name or any(query_lower in alias for alias in aliases):
                 matches.append(game)
         
-        # Remove duplicates while preserving order
         seen = set()
         unique_matches = []
         for game in matches:
@@ -194,11 +486,9 @@ class DiscordGamesDB:
                 continue
             
             name = exe.get('name', '')
-            
             if name.startswith('>'):
                 name = name[1:]
             
-            # Keep the full path, just clean up the separators
             name = name.replace('\\', '/')
             name_lower = name.lower()
             skip_patterns = ['_be.exe', '_eac.exe', 'launcher', 'unins', 'crash', 'report', 'update', 'setup', 'install']
@@ -220,11 +510,9 @@ class DiscordGamesDB:
                 continue
             
             name = exe.get('name', '')
-            
             if name.startswith('>'):
                 name = name[1:]
             
-            # Keep the full path, just clean up the separators
             name = name.replace('\\', '/')
             
             if name and name not in all_exes:
@@ -249,19 +537,12 @@ class GameFaker:
         if not exe_name.lower().endswith('.exe'):
             exe_name += '.exe'
         
-        # Parse the full path and create all directories
-        # Convert backslashes to forward slashes for consistency
         exe_name = exe_name.replace('\\', '/')
-        
-        # Create the full path: Desktop/Win64/{full_game_path}
         target_path = self.desktop_path / "Win64" / exe_name
         target_dir = target_path.parent
-        
-        # Create all parent directories
         target_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Extract just the filename for display
             filename = exe_name.split('/')[-1]
             loading_animation(f"Creating {filename}", 0.8)
             shutil.copy2(self.exe_source, target_path)
@@ -315,8 +596,9 @@ def print_menu():
     
     print(f"  {Colors.BOLD}{Colors.GREEN}1.{Colors.RESET} Search Discord database (Official API)")
     print(f"  {Colors.BOLD}{Colors.GREEN}2.{Colors.RESET} Manual mode (custom executable)")
-    print(f"  {Colors.BOLD}{Colors.GREEN}3.{Colors.RESET} Credits & Info")
-    print(f"  {Colors.BOLD}{Colors.RED}4.{Colors.RESET} Exit\n")
+    print(f"  {Colors.BOLD}{Colors.YELLOW}3.{Colors.RESET} Steam Quest Mode  {Colors.YELLOW}[NEW - for Marathon, Toxic Commando…]{Colors.RESET}")
+    print(f"  {Colors.BOLD}{Colors.GREEN}4.{Colors.RESET} Credits & Info")
+    print(f"  {Colors.BOLD}{Colors.RED}5.{Colors.RESET} Exit\n")
 
 
 def show_credits():
@@ -324,7 +606,7 @@ def show_credits():
     print_boxed_title("CREDITS", width=65, color=Colors.CYAN)
     credits = f"""
     {Colors.BOLD}Developer:{Colors.RESET} {Colors.CYAN}Strykey{Colors.RESET}
-    {Colors.BOLD}Version:{Colors.RESET} {Colors.WHITE}2.0.0{Colors.RESET}
+    {Colors.BOLD}Version:{Colors.RESET} {Colors.WHITE}2.1.0{Colors.RESET}
     
     {Colors.BOLD}Description:{Colors.RESET}
     This tool works as a game process spoofer. It tricks Discord into
@@ -342,64 +624,36 @@ def show_credits():
     6. Discord thinks you're playing the game (process name match)
     7. The fake process must stay running for Discord to keep detecting it
     
-    {Colors.BOLD}How the spoofing works:{Colors.RESET}
-    • Discord scans your running processes to detect games
-    • It looks for specific executable names (e.g., TslGame.exe for PUBG)
-    • This tool creates a fake process with that exact name
-    • Discord sees the process and assumes you're playing the game
-    • No actual game files needed - just the process name match
+    {Colors.BOLD}Steam Quest Mode (NEW):{Colors.RESET}
+    Some games (Marathon, Toxic Commando…) require Discord to verify
+    that Steam has at least partially downloaded them.
+    Steam Quest Mode bypasses this by:
+    1. Fetching app info automatically from SteamCMD public API
+    2. Generating a fake appmanifest_<appid>.acf in your steamapps/ folder
+       (StateFlags=4 → paused download, exactly what Steam creates)
+    3. Placing the fake exe directly in steamapps/common/<installdir>/
+    Discord then sees a valid Steam manifest + a running process = quest detected.
+    No actual download required.
     
     {Colors.BOLD}Database Sources:{Colors.RESET}
-    • Primary: Discord Official API (https://discord.com/api/v9/applications/detectable)
-      → LIVE database with ALL detectable games
-      → Always up-to-date with new games
-    
-    • Backup: GitHub Archive by Cynosphere
-      → Used if Discord API is unavailable
-      → Verified games list (snapshot)
-    
-    {Colors.BOLD}Features:{Colors.RESET}
-    • Automatic detection of game executables
-    • Manual mode for custom process names
-    • Auto-launch in background
-    • Beautiful colored interface (because black and white is boring)
-    • Real-time loading animations (they're not just for show)
-    • Works with Discord's official API (we're not making this up)
+    • Primary: Discord Official API
+    • Backup:  GitHub Archive by Cynosphere
     
     {Colors.BOLD}Pro Tips:{Colors.RESET}
-    • Search by game abbreviations (PUBG, LoL, CSGO, etc.)
+    • Use Steam Quest Mode for any game that wasn't detected by modes 1 or 2
+    • Find AppIDs at https://steamdb.info
     • Discord MUST be running - the tool won't work otherwise
     • The fake process must stay running for Discord to detect it
     • Close the fake exe after completing the quest
-    • If Discord doesn't detect it, make sure Discord is actually running
-    • You may need to wait a few seconds for Discord to scan processes
-    • The spoofing works by matching process names, nothing more
     
-    {Colors.BOLD}{Colors.GREEN}Multi-Game Emulation (Advanced):{Colors.RESET}
-    • You can run this tool MULTIPLE TIMES to emulate multiple games at once!
-    • Each fake process runs independently - Discord detects them all
+    {Colors.BOLD}{Colors.GREEN}Multi-Game Emulation:{Colors.RESET}
+    • Run this tool multiple times to emulate multiple games at once
     • Complete ALL orb quests simultaneously in just 15 minutes
-    • Simply launch the tool again and select a different game
-    • All processes will run in parallel - it's surprisingly effective
     
-    {Colors.BOLD}{Colors.RED}WARNING - LEGAL NOTICE & DISCLAIMER{Colors.RESET}
-    
-    {Colors.RED}{Colors.BOLD}EDUCATIONAL PURPOSES ONLY{Colors.RESET}
-    
-    This tool is provided STRICTLY for educational and research purposes.
-    It is intended to help users understand how Discord's game detection
-    system works and to study process manipulation techniques.
-    
-    {Colors.YELLOW}IMPORTANT WARNINGS:{Colors.RESET}
-    • The developers do NOT condone or encourage any misuse of this software
-    • Users are SOLELY responsible for their actions and must comply with:
-      - All applicable local, state, and federal laws
-      - Discord's Terms of Service
-      - Any other relevant terms of service or agreements
-    • Misuse of this tool may violate Discord's Terms of Service
-    • The developers are NOT responsible for any consequences resulting
-      from the use or misuse of this software
-    • Use at your own risk - no warranties or guarantees are provided
+    {Colors.BOLD}{Colors.RED}WARNING - EDUCATIONAL PURPOSES ONLY{Colors.RESET}
+    • Users are SOLELY responsible for compliance with Discord ToS
+    • The developers are NOT responsible for any consequences
+    • Use at your own risk
     
     {Colors.GRAY}Made by Strykey{Colors.RESET}
     {Colors.GRAY}Press Enter to return to menu...{Colors.RESET}
@@ -623,7 +877,6 @@ def auto_update_from_github(repo_url, dry_run=False):
             if src.is_dir():
                 continue
             rel = src.relative_to(src_dir)
-            # skip git metadata
             if any(part.startswith('.git') for part in rel.parts):
                 continue
 
@@ -635,19 +888,16 @@ def auto_update_from_github(repo_url, dry_run=False):
                 except Exception:
                     pass
 
-                # backup
                 backup_target = backup_base / rel
                 backup_target.parent.mkdir(parents=True, exist_ok=True)
                 if not dry_run:
                     shutil.copy2(dst, backup_target)
 
-                # copy new file
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if not dry_run:
                     shutil.copy2(src, dst)
                 updated.append(str(rel))
             else:
-                # new file
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if not dry_run:
                     shutil.copy2(src, dst)
@@ -655,7 +905,6 @@ def auto_update_from_github(repo_url, dry_run=False):
 
         return updated
 
-    # try main then master
     branches = ['main', 'master']
     for branch in branches:
         try:
@@ -663,7 +912,6 @@ def auto_update_from_github(repo_url, dry_run=False):
             zip_path = _download_repo_zip(zip_url)
             extracted = _extract_zip_to_temp(zip_path)
 
-            # the archive typically contains a single top-level folder
             entries = [p for p in extracted.iterdir() if p.is_dir()]
             repo_root = entries[0] if entries else extracted
 
@@ -682,7 +930,6 @@ def auto_update_from_github(repo_url, dry_run=False):
             return updated_files
 
         except Exception:
-            # try next branch
             continue
 
     return []
@@ -690,12 +937,10 @@ def auto_update_from_github(repo_url, dry_run=False):
 
 def main():
     """Main application loop"""
-    # Attempt auto-update from GitHub before starting the interactive UI
     try:
         repo_url = "https://github.com/strykey/orbshacker"
         auto_update_from_github(repo_url, dry_run=False)
     except Exception:
-        # Don't break startup for update failures; proceed normally
         pass
 
     print_banner()
@@ -717,22 +962,24 @@ def main():
             
             print_menu()
             
-            choice = input(f"{Colors.BOLD}Select option{Colors.RESET} [1-4]: ").strip()
+            choice = input(f"{Colors.BOLD}Select option{Colors.RESET} [1-5]: ").strip()
             
             if choice == '1':
                 database_mode(db, faker)
             elif choice == '2':
                 manual_mode(faker)
             elif choice == '3':
-                show_credits()
+                steam_quest_mode(faker)
             elif choice == '4':
+                show_credits()
+            elif choice == '5':
                 print_color("\n[*] Thanks for using Orb Quest Faker!", Colors.CYAN, bold=True)
                 print_color("[*] Developed by Strykey", Colors.GRAY)
                 print_color("\n[*] May your orbs be plentiful!", Colors.MAGENTA)
                 print_color("[*] Remember: With great power comes great responsibility\n", Colors.GRAY)
                 break
             else:
-                print_color("\n[ERROR] Invalid option - try 1, 2, 3, or 4", Colors.RED)
+                print_color("\n[ERROR] Invalid option - try 1, 2, 3, 4 or 5", Colors.RED)
                 time.sleep(1.5)
                 
         except KeyboardInterrupt:
