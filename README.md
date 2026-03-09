@@ -32,10 +32,10 @@ Some games (like Marathon or Toxic Commando) use a more advanced detection metho
 - ✅ Works for any game that requires a Steam manifest to be detected
 - ✅ Fully automatic, no manual AppID lookup needed
 - ✅ Your real Steam ID is used so the manifest looks legitimate
-- ✅ Searches demos and full games separately (important — quests often target the Demo version)
+- ✅ Searches demos and full games separately (important : quests often target the Demo version)
 - ✅ Cleans up after itself once you're done
 
-> **TIP:** If a quest targets a demo, search for `"Toxic Commando Demo"` instead of just `"Toxic Commando"` — they have different AppIDs and the wrong one won't work.
+> **TIP:** If a quest targets a demo, search for `"Toxic Commando Demo"` instead of just `"Toxic Commando"` : they have different AppIDs and the wrong one won't work.
 
 ## Features
 
