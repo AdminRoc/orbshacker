@@ -21,6 +21,9 @@
 
 <br/>
 
+<img width="322" height="322" alt="41827-orbs" src="https://github.com/user-attachments/assets/dc3ed64c-3dd9-4eec-810a-7949e4f48510" />
+
+
 ## What is this
 
 orbshacker is a Windows tool that creates fake game processes for Discord Orb quests without installing the actual games. It reads Discord's own public API to get the exact process names Discord expects, copies a base executable, renames it, and launches it in the background. Discord scans your process list, sees what it's looking for, and marks the quest as active.
