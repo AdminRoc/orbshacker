@@ -21,7 +21,9 @@
 
 <br/>
 
-<img width="340" alt="image" src="https://github.com/user-attachments/assets/1db237b0-2f57-428f-a004-d707f98a416e" style="border-radius: 12px; margin-top: 8px;"/>
+<div align="center">
+<img width="340" alt="image" src="https://github.com/user-attachments/assets/1db237b0-2f57-428f-a004-d707f98a416e" style="border-radius: 16px"/>
+</div>
 
 ## What is this
 
